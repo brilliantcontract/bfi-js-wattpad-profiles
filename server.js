@@ -59,23 +59,28 @@ const PROFILE_INSERT_QUERY = `
     number_following
   ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
-  )
-  ON CONFLICT (username) DO UPDATE SET
-    profile_image_url = EXCLUDED.profile_image_url,
-    profile_name = EXCLUDED.profile_name,
-    first_name = EXCLUDED.first_name,
-    last_name = EXCLUDED.last_name,
-    verified = EXCLUDED.verified,
-    number_of_work = EXCLUDED.number_of_work,
-    number_of_readling_list = EXCLUDED.number_of_readling_list,
-    number_of_followers = EXCLUDED.number_of_followers,
-    description = EXCLUDED.description,
-    gender = EXCLUDED.gender,
-    location = EXCLUDED.location,
-    join_date = EXCLUDED.join_date,
-    facebook_link = EXCLUDED.facebook_link,
-    other_link = EXCLUDED.other_link,
-    number_following = EXCLUDED.number_following;
+  );
+`;
+
+const PROFILE_UPDATE_QUERY = `
+  UPDATE wattpad.profiles
+  SET
+    profile_image_url = $1,
+    profile_name = $2,
+    first_name = $4,
+    last_name = $5,
+    verified = $6,
+    number_of_work = $7,
+    number_of_readling_list = $8,
+    number_of_followers = $9,
+    description = $10,
+    gender = $11,
+    location = $12,
+    join_date = $13,
+    facebook_link = $14,
+    other_link = $15,
+    number_following = $16
+  WHERE username = $3;
 `;
 
 const fetchFn = globalThis.fetch;
@@ -83,6 +88,15 @@ const fetchFn = globalThis.fetch;
 function coerceToString(value) {
   if (value === undefined || value === null) return null;
   return String(value);
+}
+
+function truncateString(value, maxLength) {
+  const stringValue = coerceToString(value);
+  if (stringValue === null) return null;
+  if (stringValue.length > maxLength) {
+    return stringValue.slice(0, maxLength);
+  }
+  return stringValue;
 }
 
 function balanceBraces(text, startIndex) {
@@ -214,24 +228,25 @@ function extractSocialLinks(document) {
 
 function buildProfileRecord(username, data, socialLinks) {
   return {
-    profile_image_url: coerceToString(data?.avatar),
-    profile_name: coerceToString(data?.name),
-    username: coerceToString(data?.username || username),
-    first_name: coerceToString(data?.firstName),
-    last_name: coerceToString(data?.lastName),
-    verified: coerceToString(data?.verified),
-    number_of_work: coerceToString(data?.numStoriesPublished),
-    number_of_readling_list: coerceToString(data?.numLists),
-    number_of_followers: coerceToString(data?.numFollowers),
-    description: coerceToString(he.decode(data?.description || "")) || null,
-    gender: coerceToString(data?.gender),
-    location: coerceToString(data?.location),
-    join_date: coerceToString(data?.createDate),
-    facebook_link: coerceToString(socialLinks.facebookLink),
+    profile_image_url: truncateString(data?.avatar, 4000),
+    profile_name: truncateString(data?.name, 4000),
+    username: truncateString(data?.username || username, 4000),
+    first_name: truncateString(data?.firstName, 4000),
+    last_name: truncateString(data?.lastName, 4000),
+    verified: truncateString(data?.verified, 4000),
+    number_of_work: truncateString(data?.numStoriesPublished, 4000),
+    number_of_readling_list: truncateString(data?.numLists, 4000),
+    number_of_followers: truncateString(data?.numFollowers, 4000),
+    description:
+      truncateString(he.decode(data?.description || ""), 4000) || null,
+    gender: truncateString(data?.gender, 4000),
+    location: truncateString(data?.location, 4000),
+    join_date: truncateString(data?.createDate, 4000),
+    facebook_link: truncateString(socialLinks.facebookLink, 4000),
     other_link: socialLinks.otherLinks.length
-      ? socialLinks.otherLinks.join(", ")
+      ? truncateString(socialLinks.otherLinks.join(", "), 4000)
       : null,
-    number_following: coerceToString(data?.numFollowing),
+    number_following: truncateString(data?.numFollowing, 4000),
   };
 }
 
@@ -289,7 +304,7 @@ async function selectUsernames(client) {
 }
 
 async function saveProfile(client, record) {
-  await client.query(PROFILE_INSERT_QUERY, [
+  const values = [
     record.profile_image_url,
     record.profile_name,
     record.username,
@@ -306,7 +321,19 @@ async function saveProfile(client, record) {
     record.facebook_link,
     record.other_link,
     record.number_following,
-  ]);
+  ];
+
+  await client.query("BEGIN");
+  try {
+    const updateResult = await client.query(PROFILE_UPDATE_QUERY, values);
+    if (updateResult.rowCount === 0) {
+      await client.query(PROFILE_INSERT_QUERY, values);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
 }
 
 async function processUsername(client, username, apiKey) {
