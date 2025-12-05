@@ -1,3 +1,9 @@
+import dotenv from "dotenv";
+import he from "he";
+import { JSDOM } from "jsdom";
+import { Client } from "pg";
+
+dotenv.config();
 
 const SCRAPE_NINJA_ENDPOINT = "https://scrapeninja.p.rapidapi.com/scrape";
 const SCRAPE_NINJA_HOST = "scrapeninja.p.rapidapi.com";
@@ -11,3 +17,321 @@ const DB_CONFIG = {
   password: process.env.DB_PASSWORD || "te83NECug38ueP",
   database: process.env.DB_NAME || "scrapers",
 };
+
+const REQUEST_HEADERS = {
+  accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+  "accept-language": "en-US,en;q=0.9",
+  "cache-control": "max-age=0",
+  cookie:
+    "sn__time=j%3Anull; fs__exp=1; adMetrics=0; wp-web-auth-cache-bust=0; _pbeb_=1; _afp25f_=0; _uaef25_=1; lang=1; locale=en_US; wp_id=449600db-dd66-4e3f-af8a-6c1ff55afabf; ff=1; dpr=1; tz=-2; X-Time-Zone=Europe%2FKiev; te_session_id=1764965146161; signupFrom=user_profile; _col_uuid=21c1edd6-628b-4fac-923d-76911bb4d0ed-4y7yg; AMP_TOKEN=%24NOT_FOUND; _gid=GA1.2.857101283.1764965147; _fbp=fb.1.1764965147342.648629939101461537; _gcl_au=1.1.960895685.1764965147; _ga_FNDTZ0MZDQ=GS2.1.s1764965146$o1$g1$t1764965519$j57$l0$h0; _ga=GA1.1.675412621.1764965147; g_state={\"i_l\":0,\"i_ll\":1764965521223,\"i_b\":\"eKcNSzeTata8N0kVg8HjDlt6TeicHHQQ5zm4UnIVEtc\"}; RT=r=https%3A%2F%2Fwww.wattpad.com%2Fuser%2FCutiePie_loveOt7&ul=1764967111649",
+  "if-none-match": "W/\"21067-R6nGiB9rkovGLyFuTXwX8alXLOw\"",
+  priority: "u=0, i",
+  "sec-ch-ua": '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"Windows"',
+  "sec-fetch-dest": "document",
+  "sec-fetch-mode": "navigate",
+  "sec-fetch-site": "none",
+  "sec-fetch-user": "?1",
+  "upgrade-insecure-requests": "1",
+  "user-agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+};
+
+const PROFILE_INSERT_QUERY = `
+  INSERT INTO wattpad.profiles (
+    profile_image_url,
+    profile_name,
+    username,
+    first_name,
+    last_name,
+    verified,
+    number_of_work,
+    number_of_readling_list,
+    number_of_followers,
+    description,
+    gender,
+    location,
+    join_date,
+    facebook_link,
+    other_link,
+    number_following
+  ) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+  )
+  ON CONFLICT (username) DO UPDATE SET
+    profile_image_url = EXCLUDED.profile_image_url,
+    profile_name = EXCLUDED.profile_name,
+    first_name = EXCLUDED.first_name,
+    last_name = EXCLUDED.last_name,
+    verified = EXCLUDED.verified,
+    number_of_work = EXCLUDED.number_of_work,
+    number_of_readling_list = EXCLUDED.number_of_readling_list,
+    number_of_followers = EXCLUDED.number_of_followers,
+    description = EXCLUDED.description,
+    gender = EXCLUDED.gender,
+    location = EXCLUDED.location,
+    join_date = EXCLUDED.join_date,
+    facebook_link = EXCLUDED.facebook_link,
+    other_link = EXCLUDED.other_link,
+    number_following = EXCLUDED.number_following;
+`;
+
+const fetchFn = globalThis.fetch;
+
+function coerceToString(value) {
+  if (value === undefined || value === null) return null;
+  return String(value);
+}
+
+function balanceBraces(text, startIndex) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  const start = text.indexOf("{", startIndex);
+  if (start === -1) return null;
+
+  for (let i = start; i < text.length; i += 1) {
+    const char = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+    }
+    if (inString) continue;
+    if (char === "{") depth += 1;
+    if (char === "}") depth -= 1;
+    if (depth === 0) {
+      return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function parseJsonFromScript(content) {
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+  const candidates = [];
+  try {
+    candidates.push(JSON.parse(trimmed));
+  } catch (error) {
+    const balanced = balanceBraces(trimmed, 0);
+    if (balanced) {
+      try {
+        candidates.push(JSON.parse(balanced));
+      } catch (innerError) {
+        // continue searching for nested JSON
+      }
+    }
+  }
+  return candidates.find((candidate) => candidate !== null) || null;
+}
+
+function findProfileDataCandidate(value) {
+  if (!value || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findProfileDataCandidate(item);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  const profileKeys = [
+    "avatar",
+    "username",
+    "name",
+    "firstName",
+    "lastName",
+    "numStoriesPublished",
+    "numFollowers",
+  ];
+  if (profileKeys.some((key) => key in value)) {
+    return value;
+  }
+  for (const key of Object.keys(value)) {
+    const found = findProfileDataCandidate(value[key]);
+    if (found) return found;
+  }
+  return null;
+}
+
+function extractDataFromDocument(document, rawHtml) {
+  const scripts = Array.from(document.querySelectorAll("script"));
+  for (const script of scripts) {
+    const content = script.textContent || "";
+    const parsed = parseJsonFromScript(content);
+    if (parsed) {
+      const candidate = findProfileDataCandidate(parsed);
+      if (candidate) return candidate;
+    }
+    const balancedText = balanceBraces(content, content.indexOf('"data"'));
+    if (balancedText) {
+      try {
+        const parsedBalanced = JSON.parse(balancedText);
+        const candidate = findProfileDataCandidate(parsedBalanced);
+        if (candidate) return candidate;
+      } catch (error) {
+        // ignore parsing errors
+      }
+    }
+  }
+
+  const fallbackBalanced = balanceBraces(rawHtml, rawHtml.indexOf('"data"'));
+  if (fallbackBalanced) {
+    try {
+      const parsedFallback = JSON.parse(fallbackBalanced);
+      const candidate = findProfileDataCandidate(parsedFallback);
+      if (candidate) return candidate;
+    } catch (error) {
+      // ignore parsing errors
+    }
+  }
+
+  return null;
+}
+
+function extractSocialLinks(document) {
+  const facebookAnchor = document.querySelector(
+    'a[data-share-channel="facebook"][href]'
+  );
+  const facebookLink = facebookAnchor?.href || null;
+
+  const otherAnchors = Array.from(
+    document.querySelectorAll("#profile-share-links .social-share-links a[href]")
+  ).filter((anchor) => anchor.getAttribute("data-share-channel") !== "facebook");
+  const otherLinks = otherAnchors.map((anchor) => anchor.href);
+
+  return { facebookLink, otherLinks };
+}
+
+function buildProfileRecord(username, data, socialLinks) {
+  return {
+    profile_image_url: coerceToString(data?.avatar),
+    profile_name: coerceToString(data?.name),
+    username: coerceToString(data?.username || username),
+    first_name: coerceToString(data?.firstName),
+    last_name: coerceToString(data?.lastName),
+    verified: coerceToString(data?.verified),
+    number_of_work: coerceToString(data?.numStoriesPublished),
+    number_of_readling_list: coerceToString(data?.numLists),
+    number_of_followers: coerceToString(data?.numFollowers),
+    description: coerceToString(he.decode(data?.description || "")) || null,
+    gender: coerceToString(data?.gender),
+    location: coerceToString(data?.location),
+    join_date: coerceToString(data?.createDate),
+    facebook_link: coerceToString(socialLinks.facebookLink),
+    other_link: socialLinks.otherLinks.length
+      ? socialLinks.otherLinks.join(", ")
+      : null,
+    number_following: coerceToString(data?.numFollowing),
+  };
+}
+
+async function fetchProfileHtml(username, apiKey) {
+  if (!fetchFn) {
+    throw new Error("Fetch API is not available in this environment.");
+  }
+
+  const response = await fetchFn(SCRAPE_NINJA_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-RapidAPI-Key": apiKey || DEFAULT_SCRAPE_NINJA_API_KEY,
+      "X-RapidAPI-Host": SCRAPE_NINJA_HOST,
+    },
+    body: JSON.stringify({
+      url: `https://www.wattpad.com/user/${encodeURIComponent(username)}`,
+      headers: REQUEST_HEADERS,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch profile for ${username}: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const html = payload.body || payload.html || payload.result || "";
+  if (!html) {
+    throw new Error(`Empty HTML returned for ${username}`);
+  }
+  return html;
+}
+
+async function selectUsernames(client) {
+  const result = await client.query(
+    "SELECT username FROM wattpad.not_scraped_searches_vw"
+  );
+  return result.rows.map((row) => row.username).filter(Boolean);
+}
+
+async function saveProfile(client, record) {
+  await client.query(PROFILE_INSERT_QUERY, [
+    record.profile_image_url,
+    record.profile_name,
+    record.username,
+    record.first_name,
+    record.last_name,
+    record.verified,
+    record.number_of_work,
+    record.number_of_readling_list,
+    record.number_of_followers,
+    record.description,
+    record.gender,
+    record.location,
+    record.join_date,
+    record.facebook_link,
+    record.other_link,
+    record.number_following,
+  ]);
+}
+
+async function processUsername(client, username, apiKey) {
+  const html = await fetchProfileHtml(username, apiKey);
+  const dom = new JSDOM(html);
+  const data = extractDataFromDocument(dom.window.document, html);
+  const socialLinks = extractSocialLinks(dom.window.document);
+
+  if (!data) {
+    throw new Error(`Unable to locate profile data for ${username}`);
+  }
+
+  const record = buildProfileRecord(username, data, socialLinks);
+  await saveProfile(client, record);
+  return record;
+}
+
+async function scrapeProfiles() {
+  const client = new Client(DB_CONFIG);
+  await client.connect();
+  try {
+    const usernames = await selectUsernames(client);
+    const apiKey = process.env.SCRAPE_NINJA_API_KEY;
+
+    for (const username of usernames) {
+      try {
+        console.log(`Processing ${username}...`);
+        await processUsername(client, username, apiKey);
+        console.log(`Saved profile for ${username}`);
+      } catch (error) {
+        console.error(`Error processing ${username}:`, error.message);
+      }
+    }
+  } finally {
+    await client.end();
+  }
+}
+
+if (process.argv[2] === "scrape" || process.argv.length === 2) {
+  scrapeProfiles().catch((error) => {
+    console.error("Fatal error during scraping:", error);
+    process.exitCode = 1;
+  });
+}
