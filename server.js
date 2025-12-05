@@ -240,6 +240,19 @@ async function fetchProfileHtml(username, apiKey) {
     throw new Error("Fetch API is not available in this environment.");
   }
 
+  const profileUrl = `https://www.wattpad.com/user/${encodeURIComponent(
+    username.trim()
+  )}`;
+
+  // Attempt a direct fetch first to avoid proxy-related validation errors (e.g. 422)
+  const directResponse = await fetchFn(profileUrl, {
+    headers: REQUEST_HEADERS,
+  });
+
+  if (directResponse.ok) {
+    return directResponse.text();
+  }
+
   const response = await fetchFn(SCRAPE_NINJA_ENDPOINT, {
     method: "POST",
     headers: {
@@ -248,13 +261,16 @@ async function fetchProfileHtml(username, apiKey) {
       "X-RapidAPI-Host": SCRAPE_NINJA_HOST,
     },
     body: JSON.stringify({
-      url: `https://www.wattpad.com/user/${encodeURIComponent(username)}`,
+      url: profileUrl,
       headers: REQUEST_HEADERS,
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch profile for ${username}: ${response.status}`);
+    const errorBody = await response.text();
+    throw new Error(
+      `Failed to fetch profile for ${username}: ${response.status} ${errorBody}`
+    );
   }
 
   const payload = await response.json();
