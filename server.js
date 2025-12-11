@@ -212,21 +212,7 @@ function extractDataFromDocument(document, rawHtml) {
   return null;
 }
 
-function extractSocialLinks(document) {
-  const facebookAnchor = document.querySelector(
-    'a[data-share-channel="facebook"][href]'
-  );
-  const facebookLink = facebookAnchor?.href || null;
-
-  const otherAnchors = Array.from(
-    document.querySelectorAll("#profile-share-links .social-share-links a[href]")
-  ).filter((anchor) => anchor.getAttribute("data-share-channel") !== "facebook");
-  const otherLinks = otherAnchors.map((anchor) => anchor.href);
-
-  return { facebookLink, otherLinks };
-}
-
-function buildProfileRecord(username, data, socialLinks) {
+function buildProfileRecord(username, data) {
   return {
     profile_image_url: truncateString(data?.avatar, 4000),
     profile_name: truncateString(data?.name, 4000),
@@ -242,10 +228,8 @@ function buildProfileRecord(username, data, socialLinks) {
     gender: truncateString(data?.gender, 4000),
     location: truncateString(data?.location, 4000),
     join_date: truncateString(data?.createDate, 4000),
-    facebook_link: truncateString(socialLinks.facebookLink, 4000),
-    other_link: socialLinks.otherLinks.length
-      ? truncateString(socialLinks.otherLinks.join(", "), 4000)
-      : null,
+    facebook_link: truncateString(data?.facebook, 4000),
+    other_link: truncateString(data?.website, 4000),
     number_following: truncateString(data?.numFollowing, 4000),
   };
 }
@@ -340,13 +324,12 @@ async function processUsername(client, username, apiKey) {
   const html = await fetchProfileHtml(username, apiKey);
   const dom = new JSDOM(html);
   const data = extractDataFromDocument(dom.window.document, html);
-  const socialLinks = extractSocialLinks(dom.window.document);
 
   if (!data) {
     throw new Error(`Unable to locate profile data for ${username}`);
   }
 
-  const record = buildProfileRecord(username, data, socialLinks);
+  const record = buildProfileRecord(username, data);
   await saveProfile(client, record);
   return record;
 }
