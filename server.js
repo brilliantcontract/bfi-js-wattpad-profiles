@@ -56,9 +56,10 @@ const PROFILE_INSERT_QUERY = `
     join_date,
     facebook_link,
     other_link,
-    number_following
+    number_following,
+    category
   ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
   );
 `;
 
@@ -79,7 +80,8 @@ const PROFILE_UPDATE_QUERY = `
     join_date = $13,
     facebook_link = $14,
     other_link = $15,
-    number_following = $16
+    number_following = $16,
+    category = $17
   WHERE username = $3;
 `;
 
@@ -212,7 +214,7 @@ function extractDataFromDocument(document, rawHtml) {
   return null;
 }
 
-function buildProfileRecord(username, data) {
+function buildProfileRecord(username, data, category) {
   return {
     profile_image_url: truncateString(data?.avatar, 4000),
     profile_name: truncateString(data?.name, 4000),
@@ -231,7 +233,16 @@ function buildProfileRecord(username, data) {
     facebook_link: truncateString(data?.facebook, 4000),
     other_link: truncateString(data?.website, 4000),
     number_following: truncateString(data?.numFollowing, 4000),
+    category: truncateString(category, 4000),
   };
+}
+
+function extractCategory(document) {
+  const categoryElement = document.querySelector(
+    'span[class^="LegacyChip__LegacyChipComponent"]'
+  );
+  const rawCategory = categoryElement?.textContent?.trim();
+  return rawCategory || null;
 }
 
 async function fetchProfileHtml(username, apiKey) {
@@ -305,6 +316,7 @@ async function saveProfile(client, record) {
     record.facebook_link,
     record.other_link,
     record.number_following,
+    record.category,
   ];
 
   await client.query("BEGIN");
@@ -323,13 +335,15 @@ async function saveProfile(client, record) {
 async function processUsername(client, username, apiKey) {
   const html = await fetchProfileHtml(username, apiKey);
   const dom = new JSDOM(html);
-  const data = extractDataFromDocument(dom.window.document, html);
+  const document = dom.window.document;
+  const data = extractDataFromDocument(document, html);
 
   if (!data) {
     throw new Error(`Unable to locate profile data for ${username}`);
   }
 
-  const record = buildProfileRecord(username, data);
+  const category = extractCategory(document);
+  const record = buildProfileRecord(username, data, category);
   await saveProfile(client, record);
   return record;
 }
