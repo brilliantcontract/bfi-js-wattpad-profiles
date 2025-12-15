@@ -228,7 +228,10 @@ function buildProfileRecord(username, data) {
     gender: truncateString(data?.gender, 4000),
     location: truncateString(data?.location, 4000),
     join_date: truncateString(data?.createDate, 4000),
-    facebook_link: "https://www.facebook.com/" + truncateString(data?.facebook, 4000),
+    facebook_link:
+      data?.facebook
+        ? `https://www.facebook.com/${truncateString(data.facebook, 4000)}`
+        : null,
     other_link: truncateString(data?.website, 4000),
     number_following: truncateString(data?.numFollowing, 4000),
   };
