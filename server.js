@@ -237,11 +237,22 @@ function buildProfileRecord(username, data) {
   };
 }
 
+
+function wait(time) {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      console.log(`wait ${time}`);
+      resolve();
+    }, time);
+  });
+}
+
+
 async function fetchProfileHtml(username, apiKey) {
   if (!fetchFn) {
     throw new Error("Fetch API is not available in this environment.");
   }
-
+  await wait(3000);
   const profileUrl = `https://www.wattpad.com/user/${encodeURIComponent(
     username.trim()
   )}`;
@@ -348,7 +359,7 @@ async function scrapeProfiles() {
       try {
         console.log(`Processing ${username}...`);
         await processUsername(client, username, apiKey);
-        console.log(`Saved profile for ${username}`);
+        console.log(`Saved profile for ${username}`)
       } catch (error) {
         console.error(`Error processing ${username}:`, error.message);
       }
