@@ -237,25 +237,17 @@ function buildProfileRecord(username, data) {
   };
 }
 
-
-function wait(time) {
-  return new Promise(resolve => {
-    setTimeout(() => {
-      console.log(`wait ${time}`);
-      resolve();
-    }, time);
-  });
-}
-
-
 async function fetchProfileHtml(username, apiKey) {
   if (!fetchFn) {
     throw new Error("Fetch API is not available in this environment.");
   }
-  await wait(3000);
   const profileUrl = `https://www.wattpad.com/user/${encodeURIComponent(
     username.trim()
   )}`;
+
+  const proxyHeaders = Object.entries(REQUEST_HEADERS).map(
+    ([key, value]) => `${key}: ${value}`
+  );
 
   // Attempt a direct fetch first to avoid proxy-related validation errors (e.g. 422)
   const directResponse = await fetchFn(profileUrl, {
@@ -275,7 +267,7 @@ async function fetchProfileHtml(username, apiKey) {
     },
     body: JSON.stringify({
       url: profileUrl,
-      headers: REQUEST_HEADERS,
+      headers: proxyHeaders,
     }),
   });
 
